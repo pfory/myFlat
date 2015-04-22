@@ -42,7 +42,7 @@ char EnergyID[]	        = "Energy";
 XivelyDatastream datastreams[] = {
 	XivelyDatastream(VersionID, 		    strlen(VersionID), 	      DATASTREAM_FLOAT),
 	XivelyDatastream(StatusID, 		      strlen(StatusID), 		    DATASTREAM_INT),
-	XivelyDatastream(EnergyID, 		      strlen(EnergyID), 		      DATASTREAM_INT)
+	XivelyDatastream(EnergyID, 		      strlen(EnergyID), 		    DATASTREAM_INT)
 };
 
 XivelyFeed feed(xivelyFeed, 			datastreams, 			3);
@@ -56,22 +56,28 @@ byte status=0;
 
 
 void setup() {
+  Serial.begin(19200);
   pinMode(counterPin, INPUT);      
   attachInterrupt(counterInterrupt, counterISR, CHANGE);
 }
 
 void loop() {
 #ifdef Ethernetdef
-  sendData();
+  if (pulseCount>0) {
+    sendData();
+  }
 #endif
 }
 
 
 void counterISR() { 
-  if (digitalRead(counterPin)==LOW) {
+  if (digitalRead(counterPin)==HIGH) {
     startPulse=millis();
+    Serial.println("Start pulse");
   } else {
     pulseLength = millis()-startPulse;
+    Serial.print("End pulse. Pulse length:");
+    Serial.println(pulseLenght);
     if ((pulseLength)>35 && (pulseLength)<80) {
       pulseCount++;
     }
@@ -84,6 +90,7 @@ void sendData() {
   datastreams[0].setFloat(versionSW);  
   datastreams[1].setInt(status);  
   datastreams[2].setInt(pulseCount);  
+  pulseCount=0;
 
 //#ifdef verbose
   Serial.println("Uploading data to Xively");
