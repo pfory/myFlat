@@ -77,6 +77,16 @@ void setup() {
   Serial.print("DNS:");
   Serial.println(Ethernet.dnsServerIP());
   Serial.println();
+
+  int ret = xivelyclient.get(feed, xivelyKey);
+  Serial.print("xivelyclientSolar.get returned ");
+  Serial.println(ret);
+  if (ret > 0) {
+		pulseTotal = datastreams[2].getInt();
+		Serial.print("Energy:");
+		Serial.print(pulseTotal);
+		Serial.println("Wh");
+  }
 }
 
 void loop() {
@@ -112,13 +122,12 @@ void sendData() {
   pulseTotal+=pulseCount;
   datastreams[2].setInt(pulseTotal);  
   pulseCount=0;
-
-//#ifdef verbose
-  Serial.println("Uploading data to Xively");
-//#endif
+  
 #ifdef watchdog
 	wdt_disable();
 #endif
+  
+  Serial.println("Uploading data to Xively");
 
   int ret = xivelyclient.put(feed, xivelyKey);
   
@@ -126,15 +135,12 @@ void sendData() {
     if (status==0) status=1; else status=0;
     Serial.print("Xively OK:");
 	} else {
-  //#ifdef verbose
     Serial.print("Xively err: ");
-  //#endif
   }
   Serial.println(ret);
   
 #ifdef watchdog
 	wdt_enable(WDTO_8S);
 #endif
-  //lastSendTime = millis();
 }
 #endif
