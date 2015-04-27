@@ -3,7 +3,9 @@ const byte counterInterrupt = 0; // = pin D2
 unsigned long startPulse=0;
 unsigned int pulseLength=0;
 unsigned int pulseCount=0;
-//unsigned long lastSendTime;
+unsigned long pulseTotal=0;
+
+#define STATUS_LED 13
 
 #define Ethernetdef
 
@@ -19,11 +21,11 @@ unsigned int pulseCount=0;
 #include <XivelyClient.h>
 #include <XivelyDatastream.h>
 #include <XivelyFeed.h>
-byte mac[] = { 0x00, 0xE0, 0x07D, 0xCE, 0xC6, 0x6F };
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; 
 EthernetClient client;
 char server[] = "api.cosm.com";   // name address for cosm API
 bool checkConfigFlag = false;
-IPAddress ip(192,168,1,55);
+//IPAddress ip(192,168,2,55);
 
 //XIVELY
 #include <Xively.h>
@@ -54,11 +56,27 @@ char versionSWString[] = "myFlat v"; //SW name & version
 
 byte status=0;
 
+unsigned int const SERIAL_SPEED=9600;
+
 
 void setup() {
-  Serial.begin(19200);
+  Serial.begin(SERIAL_SPEED);
+  Serial.println(versionSW);
   pinMode(counterPin, INPUT);      
   attachInterrupt(counterInterrupt, counterISR, CHANGE);
+  pinMode(STATUS_LED, OUTPUT);      // sets the digital pin as output
+  //Ethernet.begin(mac, ip);
+  Ethernet.begin(mac);
+  Serial.println("EthOK");
+  Serial.print("\nIP:");
+  Serial.println(Ethernet.localIP());
+  Serial.print("Mask:");
+  Serial.println(Ethernet.subnetMask());
+  Serial.print("Gateway:");
+  Serial.println(Ethernet.gatewayIP());
+  Serial.print("DNS:");
+  Serial.println(Ethernet.dnsServerIP());
+  Serial.println();
 }
 
 void loop() {
@@ -72,13 +90,15 @@ void loop() {
 
 void counterISR() { 
   if (digitalRead(counterPin)==HIGH) {
+    digitalWrite(STATUS_LED,HIGH);
     startPulse=millis();
     Serial.println("Start pulse");
   } else {
+    digitalWrite(STATUS_LED,LOW);
     pulseLength = millis()-startPulse;
     Serial.print("End pulse. Pulse length:");
-    Serial.println(pulseLenght);
-    if ((pulseLength)>35 && (pulseLength)<80) {
+    Serial.println(pulseLength);
+    if ((pulseLength)>35 && (pulseLength)<100) {
       pulseCount++;
     }
   }
@@ -89,7 +109,8 @@ void counterISR() {
 void sendData() {
   datastreams[0].setFloat(versionSW);  
   datastreams[1].setInt(status);  
-  datastreams[2].setInt(pulseCount);  
+  pulseTotal+=pulseCount;
+  datastreams[2].setInt(pulseTotal);  
   pulseCount=0;
 
 //#ifdef verbose
@@ -103,7 +124,6 @@ void sendData() {
   
   if (ret==200) {
     if (status==0) status=1; else status=0;
-    pulseCount++;
     Serial.print("Xively OK:");
 	} else {
   //#ifdef verbose
