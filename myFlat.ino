@@ -95,6 +95,16 @@ void setup() {
   Serial.println(Ethernet.dnsServerIP());
   Serial.println();
   
+  int ret = xivelyclient.get(feed, xivelyKey);
+  Serial.print("xivelyclientSolar.get returned ");
+  Serial.println(ret);
+  if (ret > 0) {
+		pulseTotal = datastreams[2].getInt();
+		Serial.print("Energy:");
+		Serial.print(pulseTotal);
+		Serial.println("Wh");
+  }
+  
   lastSendTime = millis();
   Udp.begin(localPort);
   Serial.print("waiting 20s for time sync...");
