@@ -14,11 +14,11 @@ unsigned long sendInterval=60000; //ms
 #define STATUS_LED 13
 
 //#include <SPI.h>
-#include <Dhcp.h>
-#include <Dns.h>
+//#include <Dhcp.h>
+//#include <Dns.h>
 #include <Ethernet.h>
 #include <EthernetClient.h>
-#include <EthernetServer.h>
+//#include <EthernetServer.h>
 #include <EthernetUdp.h>
 #include <Xively.h>
 #include <XivelyClient.h>
@@ -52,7 +52,7 @@ XivelyDatastream datastreams[] = {
 	XivelyDatastream(EnergyDayID, 		  strlen(EnergyDayID), 		  DATASTREAM_FLOAT)
 };
 
-XivelyFeed feed(xivelyFeed, 			datastreams, 			3);
+XivelyFeed feed(xivelyFeed, 			datastreams, 			5);
 XivelyClient xivelyclient(client);
 
 EthernetUDP Udp;
@@ -67,7 +67,7 @@ const int timeZone = 1;     // Central European Time
 #define TIME_DELIMITER ":"
 #define DATE_TIME_DELIMITER " "
 
-float versionSW=0.1;
+float versionSW=0.2;
 char versionSWString[] = "myFlat v"; //SW name & version
 
 byte status=0;
@@ -96,11 +96,10 @@ void setup() {
   Serial.println();
   
   int ret = xivelyclient.get(feed, xivelyKey);
-  Serial.print("xivelyclientSolar.get returned ");
   Serial.println(ret);
   if (ret > 0) {
-		pulseTotal = datastreams[2].getInt();
-		Serial.print("Energy:");
+		pulseTotal = datastreams[2].getFloat()*1000;
+		Serial.print("Nacteno Energy:");
 		Serial.print(pulseTotal);
 		Serial.println("Wh");
   }
@@ -151,9 +150,9 @@ void sendData() {
   pulseHour+=pulseCount;
   pulseDay+=pulseCount;
   pulseCount=0;
-  datastreams[2].setInt(Wh2kWh(pulseTotal));  //kWh
-  datastreams[3].setInt(Wh2kWh(pulseHour)); //kWh/hod
-  datastreams[4].setInt(Wh2kWh(pulseDay)); //kWh/den
+  datastreams[2].setFloat(Wh2kWh(pulseTotal));  //kWh
+  datastreams[3].setFloat(Wh2kWh(pulseHour)); //kWh/hod
+  datastreams[4].setFloat(Wh2kWh(pulseDay)); //kWh/den
 //#ifdef verbose
   Serial.println("Uploading data to Xively");
 //#endif
@@ -165,13 +164,19 @@ void sendData() {
   
   if (ret==200) {
     if (status==0) status=1; else status=0;
-    Serial.print("Xively OK:");
+    Serial.print("pulseTotal:");
+    Serial.println(pulseTotal);
+    Serial.print("pulseHour:");
+    Serial.println(pulseHour);
+    Serial.print("pulseDay:");
+    Serial.println(pulseDay);
     if (minute()==0) {
       pulseHour=0;
     }
     if (minute()==5 && hour()==0) {
       pulseDay=0;
     }
+    Serial.print("Xively OK:");
 	} else {
   //#ifdef verbose
     Serial.print("Xively err: ");
@@ -185,7 +190,7 @@ void sendData() {
   //lastSendTime = millis();
 }
 
-float Wh2kWh(int Wh) {
+float Wh2kWh(unsigned long Wh) {
   return (float)Wh/1000.f;
 }
 
