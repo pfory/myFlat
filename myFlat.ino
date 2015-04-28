@@ -1,16 +1,19 @@
+//Elektroměr DDS-1Y-18L digitální, jednofázový 1 impuls = 1Wh
+
 const byte counterPin = 2; 
 const byte counterInterrupt = 0; // = pin D2
 unsigned long startPulse=0;
 unsigned int pulseLength=0;
 unsigned int pulseCount=0;
 unsigned long pulseTotal=0;
+unsigned long pulseHour=0;
+unsigned long pulseDay=0;
+unsigned long lastSendTime;
+unsigned long sendInterval=60000; //ms
 
 #define STATUS_LED 13
 
-#define Ethernetdef
-
-#ifdef Ethernetdef
-#include <SPI.h>
+//#include <SPI.h>
 #include <Dhcp.h>
 #include <Dns.h>
 #include <Ethernet.h>
@@ -21,15 +24,13 @@ unsigned long pulseTotal=0;
 #include <XivelyClient.h>
 #include <XivelyDatastream.h>
 #include <XivelyFeed.h>
+#include <Time.h> 
+#include <HttpClient.h>
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; 
 EthernetClient client;
 char server[] = "api.cosm.com";   // name address for cosm API
 bool checkConfigFlag = false;
 //IPAddress ip(192,168,2,55);
-
-//XIVELY
-#include <Xively.h>
-#include <HttpClient.h>
 
 char xivelyKey[] 			= "nJklwM9ts0HnRj3FbD6x2lA8CLOx8MADYx1WGGUSom9DRk9C";
 
@@ -39,17 +40,32 @@ char xivelyKey[] 			= "nJklwM9ts0HnRj3FbD6x2lA8CLOx8MADYx1WGGUSom9DRk9C";
 char VersionID[]	 	    = "V";
 char StatusID[]	 	      = "H";
 char EnergyID[]	        = "Energy";
+char EnergyHourID[]	    = "EnergyHour";
+char EnergyDayID[]	    = "EnergyDay";
 
 
 XivelyDatastream datastreams[] = {
 	XivelyDatastream(VersionID, 		    strlen(VersionID), 	      DATASTREAM_FLOAT),
 	XivelyDatastream(StatusID, 		      strlen(StatusID), 		    DATASTREAM_INT),
-	XivelyDatastream(EnergyID, 		      strlen(EnergyID), 		    DATASTREAM_INT)
+	XivelyDatastream(EnergyID, 		      strlen(EnergyID), 		    DATASTREAM_FLOAT),
+	XivelyDatastream(EnergyHourID, 		  strlen(EnergyHourID), 		DATASTREAM_FLOAT),
+	XivelyDatastream(EnergyDayID, 		  strlen(EnergyDayID), 		  DATASTREAM_FLOAT)
 };
 
 XivelyFeed feed(xivelyFeed, 			datastreams, 			3);
 XivelyClient xivelyclient(client);
-#endif
+
+EthernetUDP Udp;
+unsigned int localPort = 8888;  // local port to listen for UDP packets
+unsigned long getNtpTime();
+void sendNTPpacket(IPAddress &address);
+IPAddress timeServer(132, 163, 4, 101); // time-a.timefreq.bldrdoc.gov
+// IPAddress timeServer(132, 163, 4, 102); // time-b.timefreq.bldrdoc.gov
+// IPAddress timeServer(132, 163, 4, 103); // time-c.timefreq.bldrdoc.gov
+const int timeZone = 1;     // Central European Time
+#define DATE_DELIMITER "."
+#define TIME_DELIMITER ":"
+#define DATE_TIME_DELIMITER " "
 
 float versionSW=0.1;
 char versionSWString[] = "myFlat v"; //SW name & version
@@ -62,6 +78,7 @@ unsigned int const SERIAL_SPEED=9600;
 void setup() {
   Serial.begin(SERIAL_SPEED);
   Serial.println(versionSW);
+  datastreams[0].setFloat(versionSW);  
   pinMode(counterPin, INPUT);      
   attachInterrupt(counterInterrupt, counterISR, CHANGE);
   pinMode(STATUS_LED, OUTPUT);      // sets the digital pin as output
@@ -77,14 +94,27 @@ void setup() {
   Serial.print("DNS:");
   Serial.println(Ethernet.dnsServerIP());
   Serial.println();
+  
+  lastSendTime = millis();
+  Udp.begin(localPort);
+  Serial.print("waiting 20s for time sync...");
+  setSyncProvider(getNtpTime);
+
+  unsigned long lastSetTime=millis();
+  while(timeStatus()==timeNotSet && millis()<lastSetTime+20000); // wait until the time is set by the sync provider, timeout 20sec
+  Serial.println("Time sync interval is set to 3600 second.");
+  setSyncInterval(3600); //sync each 1 hour
+  
+  Serial.print("Now is ");
+  printDateTime();
+  Serial.println(" UTC.");
 }
 
 void loop() {
-#ifdef Ethernetdef
-  if (pulseCount>0) {
+  if(!client.connected() && (millis() - lastSendTime > sendInterval)) {
+    lastSendTime = millis();
     sendData();
   }
-#endif
 }
 
 
@@ -105,14 +135,15 @@ void counterISR() {
 }
 
 
-#ifdef Ethernetdef
 void sendData() {
-  datastreams[0].setFloat(versionSW);  
   datastreams[1].setInt(status);  
   pulseTotal+=pulseCount;
-  datastreams[2].setInt(pulseTotal);  
+  pulseHour+=pulseCount;
+  pulseDay+=pulseCount;
   pulseCount=0;
-
+  datastreams[2].setInt(Wh2kWh(pulseTotal));  //kWh
+  datastreams[3].setInt(Wh2kWh(pulseHour)); //kWh/hod
+  datastreams[4].setInt(Wh2kWh(pulseDay)); //kWh/den
 //#ifdef verbose
   Serial.println("Uploading data to Xively");
 //#endif
@@ -125,6 +156,12 @@ void sendData() {
   if (ret==200) {
     if (status==0) status=1; else status=0;
     Serial.print("Xively OK:");
+    if (minute()==0) {
+      pulseHour=0;
+    }
+    if (minute()==5 && hour()==0) {
+      pulseDay=0;
+    }
 	} else {
   //#ifdef verbose
     Serial.print("Xively err: ");
@@ -137,4 +174,81 @@ void sendData() {
 #endif
   //lastSendTime = millis();
 }
-#endif
+
+float Wh2kWh(int Wh) {
+  return (float)Wh/1000.f;
+}
+
+void printDateTime() {
+	Serial.print(day());
+	Serial.print(DATE_DELIMITER);
+	Serial.print(month());
+	Serial.print(DATE_DELIMITER);
+	Serial.print(year());
+	Serial.print(DATE_TIME_DELIMITER);
+	printDigits(hour());
+	Serial.print(TIME_DELIMITER);
+	printDigits(minute());
+	Serial.print(TIME_DELIMITER);
+	printDigits(second());
+}
+void printDigits(int digits){
+  // utility function for digital clock display: prints preceding colon and leading 0
+  if(digits < 10) {
+    Serial.print('0');
+  }
+  Serial.print(digits);
+}
+
+/*-------- NTP code ----------*/
+
+const int NTP_PACKET_SIZE = 48; // NTP time is in the first 48 bytes of message
+byte packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming & outgoing packets
+
+unsigned long getNtpTime() {
+  while (Udp.parsePacket() > 0) ; // discard any previously received packets
+  Serial.println("Transmit NTP Request");
+  sendNTPpacket(timeServer);
+  uint32_t beginWait = millis();
+  while (millis() - beginWait < 1500) {
+    int size = Udp.parsePacket();
+    if (size >= NTP_PACKET_SIZE) {
+      Serial.println("Receive NTP Response");
+      Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
+      unsigned long secsSince1900;
+      // convert four bytes starting at location 40 to a long integer
+      secsSince1900 =  (unsigned long)packetBuffer[40] << 24;
+      secsSince1900 |= (unsigned long)packetBuffer[41] << 16;
+      secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
+      secsSince1900 |= (unsigned long)packetBuffer[43];
+      return secsSince1900 - 2208988800UL + timeZone * SECS_PER_HOUR;
+    }
+  }
+  Serial.println("No NTP Response :-(");
+  return 0; // return 0 if unable to get the time
+}
+
+// send an NTP request to the time server at the given address
+void sendNTPpacket(IPAddress &address) {
+  // set all bytes in the buffer to 0
+  memset(packetBuffer, 0, NTP_PACKET_SIZE);
+  // Initialize values needed to form NTP request
+  // (see URL above for details on the packets)
+  packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+  packetBuffer[1] = 0;     // Stratum, or type of clock
+  packetBuffer[2] = 6;     // Polling Interval
+  packetBuffer[3] = 0xEC;  // Peer Clock Precision
+  // 8 bytes of zero for Root Delay & Root Dispersion
+  packetBuffer[12]  = 49;
+  packetBuffer[13]  = 0x4E;
+  packetBuffer[14]  = 49;
+  packetBuffer[15]  = 52;
+  // all NTP fields have been given values, now
+  // you can send a packet requesting a timestamp:                 
+  Udp.beginPacket(address, 123); //NTP requests are to port 123
+  Udp.write(packetBuffer, NTP_PACKET_SIZE);
+  Udp.endPacket();
+}
+
+
+
