@@ -94,6 +94,7 @@ void setup() {
   Serial.print("DNS:");
   Serial.println(Ethernet.dnsServerIP());
   Serial.println();
+<<<<<<< HEAD
   
   lastSendTime = millis();
   Udp.begin(localPort);
@@ -108,6 +109,18 @@ void setup() {
   Serial.print("Now is ");
   printDateTime();
   Serial.println(" UTC.");
+=======
+
+  int ret = xivelyclient.get(feed, xivelyKey);
+  Serial.print("xivelyclientSolar.get returned ");
+  Serial.println(ret);
+  if (ret > 0) {
+		pulseTotal = datastreams[2].getInt();
+		Serial.print("Energy:");
+		Serial.print(pulseTotal);
+		Serial.println("Wh");
+  }
+>>>>>>> origin/master
 }
 
 void loop() {
@@ -141,15 +154,21 @@ void sendData() {
   pulseHour+=pulseCount;
   pulseDay+=pulseCount;
   pulseCount=0;
+<<<<<<< HEAD
   datastreams[2].setInt(Wh2kWh(pulseTotal));  //kWh
   datastreams[3].setInt(Wh2kWh(pulseHour)); //kWh/hod
   datastreams[4].setInt(Wh2kWh(pulseDay)); //kWh/den
 //#ifdef verbose
   Serial.println("Uploading data to Xively");
 //#endif
+=======
+  
+>>>>>>> origin/master
 #ifdef watchdog
 	wdt_disable();
 #endif
+  
+  Serial.println("Uploading data to Xively");
 
   int ret = xivelyclient.put(feed, xivelyKey);
   
@@ -163,16 +182,13 @@ void sendData() {
       pulseDay=0;
     }
 	} else {
-  //#ifdef verbose
     Serial.print("Xively err: ");
-  //#endif
   }
   Serial.println(ret);
   
 #ifdef watchdog
 	wdt_enable(WDTO_8S);
 #endif
-  //lastSendTime = millis();
 }
 
 float Wh2kWh(int Wh) {
