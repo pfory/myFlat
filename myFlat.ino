@@ -78,7 +78,7 @@ byte status=0;
 
 unsigned int const SERIAL_SPEED=9600;
 
-
+//------------------------------------------------------------- S E T U P -------------------------------------------------------
 void setup() {
   Serial.begin(SERIAL_SPEED);
   Serial.println(versionSW);
@@ -123,6 +123,7 @@ void setup() {
   Serial.println(" CET.");
 }
 
+//------------------------------------------------------------ L O O P -----------------------------------------------------------------------
 void loop() {
   if(!client.connected() && (millis() - lastSendTime > sendInterval)) {
     lastSendTime = millis();
@@ -130,7 +131,7 @@ void loop() {
   }
 }
 
-
+//------------------------------------------------------------ F U N C T I O N S --------------------------------------------------------------
 void counterISR() { 
   if (digitalRead(counterPin)==HIGH) {
     digitalWrite(STATUS_LED,HIGH);
