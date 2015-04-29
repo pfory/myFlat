@@ -10,6 +10,8 @@ unsigned long pulseHour=0;
 unsigned long pulseDay=0;
 unsigned long lastSendTime;
 unsigned long sendInterval=60000; //ms
+unsigned long lastPulse=0;
+unsigned int consumption=0;
 
 #define STATUS_LED 13
 
@@ -42,6 +44,7 @@ char StatusID[]	 	      = "H";
 char EnergyID[]	        = "Energy";
 char EnergyHourID[]	    = "EnergyHour";
 char EnergyDayID[]	    = "EnergyDay";
+char ConsumptionID[]	  = "Consumption";
 
 
 XivelyDatastream datastreams[] = {
@@ -49,10 +52,11 @@ XivelyDatastream datastreams[] = {
 	XivelyDatastream(StatusID, 		      strlen(StatusID), 		    DATASTREAM_INT),
 	XivelyDatastream(EnergyID, 		      strlen(EnergyID), 		    DATASTREAM_FLOAT),
 	XivelyDatastream(EnergyHourID, 		  strlen(EnergyHourID), 		DATASTREAM_FLOAT),
-	XivelyDatastream(EnergyDayID, 		  strlen(EnergyDayID), 		  DATASTREAM_FLOAT)
+	XivelyDatastream(EnergyDayID, 		  strlen(EnergyDayID), 		  DATASTREAM_FLOAT),
+	XivelyDatastream(ConsumptionID, 		strlen(ConsumptionID), 		DATASTREAM_INT)
 };
 
-XivelyFeed feed(xivelyFeed, 			datastreams, 			5);
+XivelyFeed feed(xivelyFeed, 			datastreams, 			6);
 XivelyClient xivelyclient(client);
 
 EthernetUDP Udp;
@@ -116,7 +120,7 @@ void setup() {
   
   Serial.print("Now is ");
   printDateTime();
-  Serial.println(" UTC.");
+  Serial.println(" CET.");
 }
 
 void loop() {
@@ -139,6 +143,10 @@ void counterISR() {
     Serial.println(pulseLength);
     if ((pulseLength)>35 && (pulseLength)<100) {
       pulseCount++;
+      if (lastPulse>0) {
+        consumption=3600000/millis()-lastPulse;
+        lastPulse=millis();
+      }
     }
   }
 }
@@ -153,6 +161,7 @@ void sendData() {
   datastreams[2].setFloat(Wh2kWh(pulseTotal));  //kWh
   datastreams[3].setFloat(Wh2kWh(pulseHour)); //kWh/hod
   datastreams[4].setFloat(Wh2kWh(pulseDay)); //kWh/den
+  datastreams[5].setInt(consumption); //spotreba W
 //#ifdef verbose
   Serial.println("Uploading data to Xively");
 //#endif
