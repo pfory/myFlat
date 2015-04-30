@@ -71,7 +71,7 @@ const int timeZone = 1;     // Central European Time
 #define TIME_DELIMITER ":"
 #define DATE_TIME_DELIMITER " "
 
-float versionSW=0.21;
+float versionSW=0.4;
 char versionSWString[] = "myFlat v"; //SW name & version
 
 byte status=0;
