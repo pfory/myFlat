@@ -71,7 +71,18 @@ const int timeZone = 1;     // Central European Time
 #define TIME_DELIMITER ":"
 #define DATE_TIME_DELIMITER " "
 
-float versionSW=0.4;
+//----------display
+#include <Adafruit_GFX.h>
+#include <IIC_without_ACK.h>
+#include "oledfont.c"   //codetab
+
+#define OLED_SDA 8
+#define OLED_SCL 9
+
+IIC_without_ACK lucky(OLED_SDA, OLED_SCL);//9 -- sda,10 -- scl
+
+
+float versionSW=0.21;
 char versionSWString[] = "myFlat v"; //SW name & version
 
 byte status=0;
@@ -80,6 +91,10 @@ unsigned int const SERIAL_SPEED=9600;
 
 //------------------------------------------------------------- S E T U P -------------------------------------------------------
 void setup() {
+  lucky.Initial();
+  delay(10);
+  lucky.Fill_Screen(0x00);
+
   Serial.begin(SERIAL_SPEED);
   Serial.println(versionSW);
   datastreams[0].setFloat(versionSW);  
