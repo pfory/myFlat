@@ -11,17 +11,12 @@ unsigned long pulseDay=0;
 unsigned long lastSendTime;
 unsigned long sendInterval=60000; //ms
 unsigned long lastPulse=0;
-unsigned int consumption=0;
+unsigned long consumption=0;
+unsigned int cycles=0;
 
 #define STATUS_LED 13
 
-//#include <SPI.h>
-//#include <Dhcp.h>
-//#include <Dns.h>
 #include <Ethernet.h>
-#include <EthernetClient.h>
-//#include <EthernetServer.h>
-#include <EthernetUdp.h>
 #include <Xively.h>
 #include <XivelyClient.h>
 #include <XivelyDatastream.h>
@@ -30,10 +25,13 @@ unsigned int consumption=0;
 #include <HttpClient.h>
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; 
 EthernetClient client;
-char server[] = "api.cosm.com";   // name address for cosm API
-bool checkConfigFlag = false;
+//char server[] = "api.cosm.com";   // name address for cosm API
 //IPAddress ip(192,168,2,55);
 
+//#define dataServer
+#ifdef dataServer
+EthernetServer server(80);
+#endif
 char xivelyKey[] 			= "nJklwM9ts0HnRj3FbD6x2lA8CLOx8MADYx1WGGUSom9DRk9C";
 
 #define xivelyFeed 				711798850
@@ -71,18 +69,24 @@ const int timeZone = 1;     // Central European Time
 #define TIME_DELIMITER ":"
 #define DATE_TIME_DELIMITER " "
 
+#define watchdog
+#ifdef watchdog
+#include <avr/wdt.h>
+#endif
+
 //----------display
-#include <Adafruit_GFX.h>
+//#define display
+#ifdef display
 #include <IIC_without_ACK.h>
 #include "oledfont.c"   //codetab
 
 #define OLED_SDA 8
 #define OLED_SCL 9
 
-IIC_without_ACK lucky(OLED_SDA, OLED_SCL);//9 -- sda,10 -- scl
+IIC_without_ACK lucky(OLED_SDA, OLED_SCL);
+#endif
 
-
-float versionSW=0.21;
+float versionSW=0.23;
 char versionSWString[] = "myFlat v"; //SW name & version
 
 byte status=0;
@@ -91,17 +95,16 @@ unsigned int const SERIAL_SPEED=9600;
 
 //------------------------------------------------------------- S E T U P -------------------------------------------------------
 void setup() {
+#ifdef display
   lucky.Initial();
   delay(10);
   lucky.Fill_Screen(0x00);
-
+  lucky.Char_F6x8(0,2,"myFlat");
+#endif
   Serial.begin(SERIAL_SPEED);
+  //Serial.print(versionSWString);
   Serial.println(versionSW);
-  datastreams[0].setFloat(versionSW);  
-  pinMode(counterPin, INPUT);      
-  attachInterrupt(counterInterrupt, counterISR, CHANGE);
   pinMode(STATUS_LED, OUTPUT);      // sets the digital pin as output
-  //Ethernet.begin(mac, ip);
   Ethernet.begin(mac);
   Serial.println("EthOK");
   Serial.print("\nIP:");
@@ -114,14 +117,29 @@ void setup() {
   Serial.println(Ethernet.dnsServerIP());
   Serial.println();
   
+#ifdef dataServer
+  server.begin();
+  Serial.print("server is at ");
+  Serial.println(Ethernet.localIP());
+#endif  
   int ret = xivelyclient.get(feed, xivelyKey);
   Serial.println(ret);
   if (ret > 0) {
 		pulseTotal = datastreams[2].getFloat()*1000;
+		pulseDay = datastreams[4].getFloat()*1000;
+		pulseHour = datastreams[3].getFloat()*1000;
 		Serial.print("Nacteno Energy:");
 		Serial.print(pulseTotal);
 		Serial.println("Wh");
+		Serial.print("Nacteno EnergyDay:");
+		Serial.print(pulseDay);
+		Serial.println("Wh");
+		Serial.print("Nacteno EnergyHour:");
+		Serial.print(pulseHour);
+		Serial.println("Wh");
   }
+  datastreams[0].setFloat(versionSW);  
+
   
   lastSendTime = millis();
   Udp.begin(localPort);
@@ -136,10 +154,26 @@ void setup() {
   Serial.print("Now is ");
   printDateTime();
   Serial.println(" CET.");
+
+  pinMode(counterPin, INPUT);      
+  attachInterrupt(counterInterrupt, counterISR, CHANGE);
+  
+#ifdef watchdog
+	wdt_enable(WDTO_8S);
+#endif
 }
 
 //------------------------------------------------------------ L O O P -----------------------------------------------------------------------
 void loop() {
+#ifdef watchdog
+	wdt_reset();
+#endif  
+#ifdef dataServer
+  client = server.available();
+  if (client) {
+    showStatus();
+  }
+#endif
   if(!client.connected() && (millis() - lastSendTime > sendInterval)) {
     lastSendTime = millis();
     sendData();
@@ -151,18 +185,26 @@ void counterISR() {
   if (digitalRead(counterPin)==HIGH) {
     digitalWrite(STATUS_LED,HIGH);
     startPulse=millis();
-    Serial.println("Start pulse");
+    //Serial.println("Start pulse");
   } else {
     digitalWrite(STATUS_LED,LOW);
     pulseLength = millis()-startPulse;
-    Serial.print("End pulse. Pulse length:");
-    Serial.println(pulseLength);
+    //Serial.println("End pulse");
+    //Serial.print("Pulse length:");
+    //Serial.println(pulseLength);
     if ((pulseLength)>35 && (pulseLength)<100) {
       pulseCount++;
       if (lastPulse>0) {
-        consumption=3600000/millis()-lastPulse;
-        lastPulse=millis();
-      }
+        consumption+=3600000/(millis()-lastPulse);
+        cycles++;
+        Serial.print("Prikon:");
+        Serial.print(3600000/(millis()-lastPulse));
+        Serial.println(" W");
+#ifdef display
+        lucky.Char_F6x8(0,2,"Prikon:");
+#endif
+        }
+      lastPulse=millis();
     }
   }
 }
@@ -177,10 +219,11 @@ void sendData() {
   datastreams[2].setFloat(Wh2kWh(pulseTotal));  //kWh
   datastreams[3].setFloat(Wh2kWh(pulseHour)); //kWh/hod
   datastreams[4].setFloat(Wh2kWh(pulseDay)); //kWh/den
-  datastreams[5].setInt(consumption); //spotreba W
-//#ifdef verbose
-  Serial.println("Uploading data to Xively");
-//#endif
+  if (cycles>0) {
+    datastreams[5].setInt(consumption/cycles); //spotreba W
+  }
+  Serial.print("Uploading data to Xively ");
+  printDateTime();
 #ifdef watchdog
 	wdt_disable();
 #endif
@@ -189,23 +232,25 @@ void sendData() {
   
   if (ret==200) {
     if (status==0) status=1; else status=0;
-    Serial.print("pulseTotal:");
+    /*Serial.print("pulseTotal:");
     Serial.println(pulseTotal);
     Serial.print("pulseHour:");
     Serial.println(pulseHour);
     Serial.print("pulseDay:");
-    Serial.println(pulseDay);
+    Serial.println(pulseDay);*/
+    if (cycles>0) {
+      cycles=0;
+      consumption=0;
+    }
     if (minute()==0) {
       pulseHour=0;
     }
     if (minute()==5 && hour()==0) {
       pulseDay=0;
     }
-    Serial.print("Xively OK:");
+    Serial.print(" OK:");
 	} else {
-  //#ifdef verbose
-    Serial.print("Xively err: ");
-  //#endif
+    Serial.print(" ERR: ");
   }
   Serial.println(ret);
   
@@ -290,5 +335,48 @@ void sendNTPpacket(IPAddress &address) {
   Udp.endPacket();
 }
 
-
+#ifdef dataServer
+void showStatus() {
+  Serial.println("new client");
+  // an http request ends with a blank line
+  boolean currentLineIsBlank = true;
+  while (client.connected()) {
+    if (client.available()) {
+      char c = client.read();
+      Serial.write(c);
+      // if you've gotten to the end of the line (received a newline
+      // character) and the line is blank, the http request has ended,
+      // so you can send a reply
+      if (c == '\n' && currentLineIsBlank) {
+        // send a standard http response header
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: text/html");
+        client.println("Connection: close");  // the connection will be closed after completion of the response
+        //client.println("Refresh: 5");  // refresh the page automatically every 5 sec
+        client.println();
+        client.println("<!DOCTYPE HTML>");
+        client.println("<html>");
+        // output the value of each analog input pin
+        client.print(versionSWString);
+        client.print(versionSW);
+        client.println("</html>");
+        break;
+      }
+      if (c == '\n') {
+        // you're starting a new line
+        currentLineIsBlank = true;
+      }
+      else if (c != '\r') {
+        // you've gotten a character on the current line
+        currentLineIsBlank = false;
+      }
+    }
+  }
+  // give the web browser time to receive the data
+  delay(1);
+  // close the connection:
+  client.stop();
+  Serial.println("client disconnected");
+}
+#endif
 
