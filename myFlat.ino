@@ -14,7 +14,7 @@ unsigned long lastPulse=0;
 unsigned long consumption=0;
 unsigned int cycles=0;
 
-#define STATUS_LED 13
+#define STATUS_LED 3
 
 #include <Ethernet.h>
 #include <Xively.h>
@@ -86,7 +86,7 @@ const int timeZone = 1;     // Central European Time
 IIC_without_ACK lucky(OLED_SDA, OLED_SCL);
 #endif
 
-float versionSW=0.23;
+float versionSW=0.24;
 char versionSWString[] = "myFlat v"; //SW name & version
 
 byte status=0;
