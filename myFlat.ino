@@ -26,7 +26,7 @@ unsigned int cycles=0;
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; 
 EthernetClient client;
 //char server[] = "api.cosm.com";   // name address for cosm API
-//IPAddress ip(192,168,2,55);
+//IPAddress ip(192,168,2,100);
 
 //#define dataServer
 #ifdef dataServer
@@ -86,15 +86,21 @@ const int timeZone = 1;     // Central European Time
 IIC_without_ACK lucky(OLED_SDA, OLED_SCL);
 #endif
 
-float versionSW=0.24;
+float versionSW=0.25;
 char versionSWString[] = "myFlat v"; //SW name & version
 
 byte status=0;
 
 unsigned int const SERIAL_SPEED=9600;
 
+//#define verbose
+
 //------------------------------------------------------------- S E T U P -------------------------------------------------------
 void setup() {
+  blik(1, 500);
+#ifdef watchdog
+	wdt_enable(WDTO_8S);
+#endif
 #ifdef display
   lucky.Initial();
   delay(10);
@@ -106,6 +112,8 @@ void setup() {
   Serial.println(versionSW);
   pinMode(STATUS_LED, OUTPUT);      // sets the digital pin as output
   Ethernet.begin(mac);
+  blik(1, 100);
+#ifdef verbose
   Serial.println("EthOK");
   Serial.print("\nIP:");
   Serial.println(Ethernet.localIP());
@@ -116,6 +124,10 @@ void setup() {
   Serial.print("DNS:");
   Serial.println(Ethernet.dnsServerIP());
   Serial.println();
+#endif
+#ifdef watchdog
+	wdt_reset();
+#endif  
   
 #ifdef dataServer
   server.begin();
@@ -128,6 +140,7 @@ void setup() {
 		pulseTotal = datastreams[2].getFloat()*1000;
 		pulseDay = datastreams[4].getFloat()*1000;
 		pulseHour = datastreams[3].getFloat()*1000;
+#ifdef verbose
 		Serial.print("Nacteno Energy:");
 		Serial.print(pulseTotal);
 		Serial.println("Wh");
@@ -137,10 +150,13 @@ void setup() {
 		Serial.print("Nacteno EnergyHour:");
 		Serial.print(pulseHour);
 		Serial.println("Wh");
+#endif
   }
   datastreams[0].setFloat(versionSW);  
+#ifdef watchdog
+	wdt_reset();
+#endif  
 
-  
   lastSendTime = millis();
   Udp.begin(localPort);
   Serial.print("waiting 20s for time sync...");
@@ -150,17 +166,15 @@ void setup() {
   while(timeStatus()==timeNotSet && millis()<lastSetTime+20000); // wait until the time is set by the sync provider, timeout 20sec
   Serial.println("Time sync interval is set to 3600 second.");
   setSyncInterval(3600); //sync each 1 hour
-  
+#ifdef verbose
   Serial.print("Now is ");
   printDateTime();
   Serial.println(" CET.");
-
+#endif
   pinMode(counterPin, INPUT);      
   attachInterrupt(counterInterrupt, counterISR, CHANGE);
   
-#ifdef watchdog
-	wdt_enable(WDTO_8S);
-#endif
+  blik(10, 20);
 }
 
 //------------------------------------------------------------ L O O P -----------------------------------------------------------------------
@@ -197,13 +211,15 @@ void counterISR() {
       if (lastPulse>0) {
         consumption+=3600000/(millis()-lastPulse);
         cycles++;
+#ifdef verbose
         Serial.print("Prikon:");
         Serial.print(3600000/(millis()-lastPulse));
         Serial.println(" W");
+#endif
 #ifdef display
         lucky.Char_F6x8(0,2,"Prikon:");
 #endif
-        }
+      }
       lastPulse=millis();
     }
   }
@@ -221,9 +237,13 @@ void sendData() {
   datastreams[4].setFloat(Wh2kWh(pulseDay)); //kWh/den
   if (cycles>0) {
     datastreams[5].setInt(consumption/cycles); //spotreba W
+  } else {
+      datastreams[5].setInt(0); //spotreba W
   }
+#ifdef verbose
   Serial.print("Uploading data to Xively ");
   printDateTime();
+#endif
 #ifdef watchdog
 	wdt_disable();
 #endif
@@ -248,11 +268,17 @@ void sendData() {
     if (minute()==5 && hour()==0) {
       pulseDay=0;
     }
+#ifdef verbose
     Serial.print(" OK:");
+#endif
 	} else {
+#ifdef verbose
     Serial.print(" ERR: ");
+#endif
   }
+#ifdef verbose
   Serial.println(ret);
+#endif
   
 #ifdef watchdog
 	wdt_enable(WDTO_8S);
@@ -264,6 +290,7 @@ float Wh2kWh(unsigned long Wh) {
   return (float)Wh/1000.f;
 }
 
+#ifdef verbose
 void printDateTime() {
 	Serial.print(day());
 	Serial.print(DATE_DELIMITER);
@@ -284,6 +311,7 @@ void printDigits(int digits){
   }
   Serial.print(digits);
 }
+#endif
 
 /*-------- NTP code ----------*/
 
@@ -380,3 +408,11 @@ void showStatus() {
 }
 #endif
 
+void blik(byte count, unsigned int del) {
+  for (int i=0; i<count; i++) {
+    delay(del);
+    digitalWrite(STATUS_LED,HIGH);
+    delay(del);
+    digitalWrite(STATUS_LED,LOW);
+  }
+}
