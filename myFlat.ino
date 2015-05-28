@@ -1,5 +1,35 @@
-//Elektroměr DDS-1Y-18L digitální, jednofázový 1 impuls = 1Wh
+//  Elektroměr DDS-1Y-18L digitální, jednofázový 1 impuls = 1Wh, impulsni vystup musi byt napajen 12V, vstup na D2 pres delic
+//  Arduino Pro Mini 328
 
+//  Ethernet Shield - úprava reset pinu GND - kondenzátor - RESET PIN - 10k ohm - 3.3V
+
+//  impulsni vystup
+//  +12V - elektromer - odpor - D2 - odpor - GND
+
+//  indikacni LED
+//  D3 - 220 ohm - LED anoda - LED katoda - GND
+
+//---------------------------------------------------------------
+//         Arduino   Shield
+//  MISO   D11       SPI        
+//  MOSI   D12       SPI
+//  SCK    D13       SPI
+//  SS     D10       SPI
+//         D2                   interrupt od elektromeru
+//         D3                   LED indikujici impulsy
+//---------------------------------------------------------------
+
+//  version history
+//  0.1   - 27.4.2015 initial version
+//  0.2   -  4.5.2015
+//  0.21  -  4.5.2015
+//  0.22  -  6.5.2015
+//  0.23  - 12.5.2015
+//  0.24  - 20.5.2015
+//  0.25  - 21.5.2015
+
+
+//  ---------------------------------------------------------------- C O D E -----------------------------------------------
 const byte counterPin = 2; 
 const byte counterInterrupt = 0; // = pin D2
 unsigned long startPulse=0;
