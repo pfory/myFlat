@@ -4,6 +4,12 @@
 #include <XivelyFeed.h>
 #include <HttpClient.h>
 #include <Time.h> 
+#include <MQTT.h>
+#include <EEPROM.h>
+
+extern "C" {
+#include "user_interface.h"
+}
 
 #include <Wire.h>
 #include <OneWire.h>
@@ -13,19 +19,19 @@
 #define COUNTER_PIN           13
 #define STATUS_LED            15
 
+#define xively
+#define IoT
 
 OneWire oneWireIN(ONE_WIRE_BUS_IN);
 DallasTemperature sensorsIN(&oneWireIN);
 
 float                 tempIN        = 0;
 
-
-char xivelyKey[] 			= "VgoUxsEYlsN65fvTsBh8Sp9919cpMmv1cI2MoOzgHPnNADMa";
-
 #include <ESP8266WiFi.h>
 WiFiClient client;
 
-
+#ifdef xively
+char xivelyKey[] 			= "VgoUxsEYlsN65fvTsBh8Sp9919cpMmv1cI2MoOzgHPnNADMa";
 #define xivelyFeed 				395999474
 
 char VersionID[]	 	    = "V";
@@ -49,6 +55,7 @@ XivelyDatastream datastreams[] = {
 
 XivelyFeed feed(xivelyFeed, 			datastreams, 			7);
 XivelyClient xivelyclient(client);
+#endif
 
 const char* ssid     = "Datlovo";
 const char* password = "Nu6kMABmseYwbCoJ7LyG";
@@ -57,11 +64,40 @@ byte status=0;
 unsigned long lastSendTime        = 0;
 const unsigned long sendInterval  = 20000; //ms
 
-// EasyIoT Cloud definitions - change EIOT_CLOUD_TEMP_INSTANCE_PARAM_ID and EIOT_CLOUD_HUM_INSTANCE_PARAM_ID
-#define EIOT_CLOUD_TEMP_INSTANCE_PARAM_ID    "564241f9cf045c757f7e6301/NTjETbUl91Ek0MB2"
+#ifdef IoT
+#define AP_SSID "Datlovo"
+#define AP_PASSWORD "Nu6kMABmseYwbCoJ7LyG"
 
-#define EIOT_CLOUD_ADDRESS     "cloud.iot-playground.com"
-#define EIOT_CLOUD_PORT        40404
+#define EIOTCLOUD_USERNAME "datel"
+#define EIOTCLOUD_PASSWORD "mrdatel"
+
+// create MQTT object
+#define EIOT_CLOUD_ADDRESS        "cloud.iot-playground.com"
+MQTT myMqtt("", EIOT_CLOUD_ADDRESS, 1883);
+
+String instanceId                   = "564241f9cf045c757f7e6301";
+String valueStr("");
+boolean result;
+String topic("");
+bool stepOk                         = false;
+
+#define CONFIG_START 0
+#define CONFIG_VERSION "v01"
+
+struct StoreStruct {
+  // This is for mere detection if they are your settings
+  char    version[4];
+  uint    moduleId;  // module id
+  float   energy;
+} storage = {
+  CONFIG_VERSION,
+  3,
+  1234.56,
+};
+
+float energy;
+
+#endif
 
 #include <WiFiUdp.h>
 unsigned int localPort = 8888;      // local port to listen for UDP packets
@@ -90,13 +126,14 @@ void setup() {
   pinMode(STATUS_LED, OUTPUT);      // sets the digital pin as output
   blik(5, 50);
   // We start by connecting to a WiFi network
+  EEPROM.begin(512);
+  loadConfig();
 
   Serial.println();
   Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
   
   wifiConnect();
+  WiFi.printDiag(Serial);
 
   Serial.println("Starting UDP");
   Udp.begin(localPort);
@@ -141,12 +178,19 @@ void setup() {
   Serial.println(" CET.");
 #endif
 */
-  attachInterrupt(COUNTER_PIN, counterISR, CHANGE);
 
+  setMQTT();
+
+  attachInterrupt(COUNTER_PIN, counterISR, CHANGE);
+  
+  //ESP.wdtEnable(WDTO_8S);
+  Serial.setDebugOutput(true);
+  
 }
 
 //------------------------------------------------------------ L O O P -----------------------------------------------------------------------
 void loop() {
+  //ESP.wdtFeed();
   
   if(!client.connected() && (millis() - lastSendTime > sendInterval)) {
     lastSendTime = millis();
@@ -156,13 +200,18 @@ void loop() {
       tempIN = sensorsIN.getTempCByIndex(0);
     //}
     displayTemp();
-    sendTeperatureEasyIoT(tempIN);
-    //sendDataXively();
+    #ifdef xively
+    sendDataXively();
+    #endif
+    #ifdef IoT
+    sendParamMQTT();
+    #endif
   }
 }
 
 void counterISR() { 
   Serial.println("INT");
+  energy++;
 }
 
 void startMeas() {
@@ -180,9 +229,10 @@ void displayTemp() {
   Serial.println();
 }
 
+#ifdef xively
 void sendDataXively() {
   datastreams[1].setInt(status);  
-  datastreams[2].setFloat(50.f);  //kWh
+  datastreams[2].setFloat(energy);  //kWh
   datastreams[3].setFloat(100.f); //kWh/hod
   datastreams[4].setFloat(150.f); //kWh/den
   datastreams[5].setInt(1); //spotreba W
@@ -190,7 +240,9 @@ void sendDataXively() {
   Serial.print("Uploading data to Xively ");
 
   printDateTime();
+  //ESP.wdtDisable();
   int ret = xivelyclient.put(feed, xivelyKey);
+  //ESP.wdtEnable(WDTO_8S);
   Serial.println();
   printDateTime();
   if (ret==200) {
@@ -208,7 +260,10 @@ void sendDataXively() {
   Serial.println(ret);
 
 }
+#endif
 
+/*
+#ifdef IoT
 void sendTeperatureEasyIoT(float temp)
 {  
    digitalWrite(STATUS_LED,HIGH);
@@ -242,8 +297,8 @@ void sendTeperatureEasyIoT(float temp)
   Serial.println("Connection closed");
   digitalWrite(STATUS_LED,LOW);
 }
-
-
+#endif
+*/
 /*-------- NTP code ----------*/
 long getNtpTime() {
   WiFi.hostByName(ntpServerName, timeServerIP); 
@@ -315,19 +370,141 @@ void printDigits(int digits){
   Serial.print(digits);
 }
 
+
 void wifiConnect() {
-  WiFi.begin(ssid, password);
-  
+  Serial.print("Connecting to AP");
+  WiFi.begin(AP_SSID, AP_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+    delay(1000);
     Serial.print(".");
   }
-
+  
   Serial.println("");
   Serial.println("WiFi connected");  
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
 }
+
+void sendParamMQTT() {
+  valueStr = String(tempIN);
+  topic = "/Db/" + instanceId + "/3/Sensor.Parameter1";
+  result = myMqtt.publish(topic, valueStr);
+  valueStr = String(energy);
+  topic = "/Db/" + instanceId + "/3/Sensor.Parameter2";
+  result = myMqtt.publish(topic, valueStr);
+}
+
+
+void myConnectedCb() {
+  Serial.println("connected to MQTT server");
+}
+
+void myDisconnectedCb() {
+  Serial.println("disconnected. try to reconnect...");
+  delay(500);
+  myMqtt.connect();
+}
+
+void myPublishedCb() {
+  Serial.println(" - published.");
+}
+
+void myDataCb(String& topic, String& data) {  
+  Serial.print(topic);
+  Serial.print(": ");
+  Serial.println(data);
+
+  if (topic == String("/Db/InstanceId"))
+  {
+    //instanceId = data;
+    stepOk = true;
+  }
+  else if (topic ==  String("/Db/"+instanceId+"/NewModule"))
+  {
+    storage.moduleId = data.toInt();
+    stepOk = true;
+  }
+  else if (topic == String("/Db/"+instanceId+"/"+String(storage.moduleId)+ "/Sensor.Parameter1/NewParameter"))
+  {
+    stepOk = true;
+  }
+  else if (topic == String("/Db/"+instanceId+"/"+String(storage.moduleId)+ "/Settings.Icon1/NewParameter"))
+  {
+    stepOk = true;
+  } /*else if (topic == String("/Db/"+instanceId+"/3/Sensor.Parameter2")) {
+    energy = data.toFloat();
+    Serial.print("Energy = ");
+    Serial.println(energy);
+    //saveConfig();
+  }*/
+}
+
+String macToStr(const uint8_t* mac) {
+  String result;
+  for (int i = 0; i < 6; ++i) {
+    result += String(mac[i], 16);
+    if (i < 5)
+      result += ':';
+  }
+  return result;
+}
+
+void setMQTT() {
+  String clientName;
+  //clientName += "esp8266-";
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  clientName += macToStr(mac);
+  clientName += "-";
+  clientName += String(micros() & 0xff, 16);
+  myMqtt.setClientId((char*) clientName.c_str());
+
+
+  Serial.print("MQTT client id:");
+  Serial.println(clientName);
+
+  // setup callbacks
+  myMqtt.onConnected(myConnectedCb);
+  myMqtt.onDisconnected(myDisconnectedCb);
+  myMqtt.onPublished(myPublishedCb);
+  myMqtt.onData(myDataCb);
+  
+  //////Serial.println("connect mqtt...");
+  myMqtt.setUserPwd(EIOTCLOUD_USERNAME, EIOTCLOUD_PASSWORD);  
+  myMqtt.connect();
+
+  delay(500);
+
+  //get instance id
+  //////Serial.println("suscribe: Db/InstanceId");
+  myMqtt.subscribe("/Db/InstanceId");
+
+  waitOk();
+
+  Serial.print("ModuleId: ");
+  Serial.println(storage.moduleId);
+
+  
+  Serial.print("Subscribe ");
+  myMqtt.subscribe("/Db/"+instanceId+"/3/Sensor.Parameter2");
+  Serial.println(" OK.");
+  
+
+}
+
+void waitOk()
+{
+  while(!stepOk)
+    delay(100);
+ 
+  stepOk = false;
+}
+
+void saveConfig() {
+  for (unsigned int t=0; t<sizeof(storage); t++)
+    EEPROM.write(CONFIG_START + t, *((char*)&storage + t));
+
+  EEPROM.commit();
+}
+
 
 void blik(byte count, unsigned int del) {
   for (int i=0; i<count; i++) {
@@ -336,4 +513,14 @@ void blik(byte count, unsigned int del) {
     delay(del);
     digitalWrite(STATUS_LED,LOW);
   }
+}
+
+void loadConfig() {
+  // To make sure there are settings, and they are YOURS!
+  // If nothing is found it will use the default settings.
+  if (EEPROM.read(CONFIG_START + 0) == CONFIG_VERSION[0] &&
+      EEPROM.read(CONFIG_START + 1) == CONFIG_VERSION[1] &&
+      EEPROM.read(CONFIG_START + 2) == CONFIG_VERSION[2])
+    for (unsigned int t=0; t<sizeof(storage); t++)
+      *((char*)&storage + t) = EEPROM.read(CONFIG_START + t);
 }
