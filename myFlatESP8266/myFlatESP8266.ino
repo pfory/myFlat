@@ -17,9 +17,9 @@ extern "C" {
 
 #define ONE_WIRE_BUS_IN        2
 #define COUNTER_PIN           13
-#define STATUS_LED            15
+//#define STATUS_LED            15
 
-#define xively
+//#define xively
 #define IoT
 
 OneWire oneWireIN(ONE_WIRE_BUS_IN);
@@ -61,9 +61,18 @@ const char* ssid     = "Datlovo";
 const char* password = "Nu6kMABmseYwbCoJ7LyG";
 
 byte status=0;
-unsigned long lastSendTime        = 0;
-const unsigned long sendInterval  = 20000; //ms
-
+unsigned long       lastSendTime      = 0;
+const unsigned long sendInterval      = 20000; //ms
+volatile unsigned long       startPulse        = 0;
+volatile unsigned int        pulseLength       = 0;
+volatile unsigned int        pulseCount        = 0;
+unsigned long                pulseTotal        = 0;
+unsigned long                pulseHour         = 0;
+unsigned long                pulseDay          = 0;
+unsigned long                lastPulse         = 0;
+unsigned long                consumption       = 0;
+unsigned long                cycles            = 0;
+bool                         saveEEPROMEnergy  = false;
 #ifdef IoT
 #define AP_SSID "Datlovo"
 #define AP_PASSWORD "Nu6kMABmseYwbCoJ7LyG"
@@ -92,10 +101,8 @@ struct StoreStruct {
 } storage = {
   CONFIG_VERSION,
   3,
-  1234.56,
+  3620.33,
 };
-
-float energy;
 
 #endif
 
@@ -123,8 +130,8 @@ unsigned long lastSetTime;
 
 void setup() {
   Serial.begin(115200);
-  pinMode(STATUS_LED, OUTPUT);      // sets the digital pin as output
-  blik(5, 50);
+  //pinMode(STATUS_LED, OUTPUT);      // sets the digital pin as output
+  //blik(5, 50);
   // We start by connecting to a WiFi network
   EEPROM.begin(512);
   loadConfig();
@@ -162,30 +169,18 @@ void setup() {
   Serial.print(" on bus IN - pin ");
   Serial.println(ONE_WIRE_BUS_IN);
 
-
-  /*
-  Udp.begin(localPort);
-  Serial.print("waiting 20s for time sync...");
-  //setSyncProvider(getNtpTime);
-
-  unsigned long lastSetTime=millis();
-  while(timeStatus()==timeNotSet && millis()<lastSetTime+20000); // wait until the time is set by the sync provider, timeout 20sec
-  Serial.println("Time sync interval is set to 3600 second.");
-  setSyncInterval(3600); //sync each 1 hour
-#ifdef verbose
-  Serial.print("Now is ");
-  printDateTime();
-  Serial.println(" CET.");
-#endif
-*/
-
   setMQTT();
 
-  attachInterrupt(COUNTER_PIN, counterISR, CHANGE);
+  pinMode(COUNTER_PIN, INPUT);      
+  attachInterrupt(COUNTER_PIN, counterISR, HIGH);
   
   //ESP.wdtEnable(WDTO_8S);
-  Serial.setDebugOutput(true);
-  
+  //Serial.setDebugOutput(true);
+ 
+  pulseTotal=storage.energy*1000.f;
+  Serial.print("Energy from EEPROM: ");
+  Serial.print(storage.energy);
+  Serial.println(" kWh");
 }
 
 //------------------------------------------------------------ L O O P -----------------------------------------------------------------------
@@ -207,11 +202,38 @@ void loop() {
     sendParamMQTT();
     #endif
   }
+  if (saveEEPROMEnergy) {
+    storage.energy=pulseCount/1000;
+    Serial.print("Save energy to EEPROM: ");
+    Serial.print(storage.energy);
+    Serial.println(" kWh");
+    saveConfig();
+    saveEEPROMEnergy=false;
+  }
+
 }
 
+//------------------------------------------------------------ F U N C T I O N S --------------------------------------------------------------
 void counterISR() { 
-  Serial.println("INT");
-  energy++;
+  //Serial.println("PULSE");
+  //if (digitalRead(COUNTER_PIN)==HIGH) {
+    //digitalWrite(STATUS_LED,HIGH);
+    //startPulse=millis();
+    //Serial.println("Start pulse");
+  //} else {
+    //digitalWrite(STATUS_LED,LOW);
+    //pulseLength = millis()-startPulse;
+    //Serial.println("End pulse");
+    //Serial.print("Pulse length:");
+    //Serial.println(pulseLength);
+    //if ((pulseLength)>35 && (pulseLength)<100) {
+    pulseCount++;
+    cycles++;
+    if ((pulseCount%1000)==0) {
+      saveEEPROMEnergy=true;
+    }
+    //}
+  //}
 }
 
 void startMeas() {
@@ -232,10 +254,18 @@ void displayTemp() {
 #ifdef xively
 void sendDataXively() {
   datastreams[1].setInt(status);  
-  datastreams[2].setFloat(energy);  //kWh
-  datastreams[3].setFloat(100.f); //kWh/hod
-  datastreams[4].setFloat(150.f); //kWh/den
-  datastreams[5].setInt(1); //spotreba W
+  pulseTotal+=pulseCount;
+  pulseHour+=pulseCount;
+  pulseDay+=pulseCount;
+  pulseCount=0;
+  datastreams[2].setFloat(Wh2kWh(pulseTotal));  //kWh
+  datastreams[3].setFloat(Wh2kWh(pulseHour)); //kWh/hod
+  datastreams[4].setFloat(Wh2kWh(pulseDay)); //kWh/den
+  if (cycles>0) {
+    datastreams[5].setInt(consumption/cycles); //spotreba W
+  } else {
+      datastreams[5].setInt(0); //spotreba W
+  }
   datastreams[6].setFloat(tempIN); //kWh/den
   Serial.print("Uploading data to Xively ");
 
@@ -262,114 +292,9 @@ void sendDataXively() {
 }
 #endif
 
-/*
-#ifdef IoT
-void sendTeperatureEasyIoT(float temp)
-{  
-   digitalWrite(STATUS_LED,HIGH);
-   WiFiClient client;
-   
-   while(!client.connect(EIOT_CLOUD_ADDRESS, EIOT_CLOUD_PORT)) {
-    Serial.println("connection failed");
-    wifiConnect(); 
-  }
-
-  String url = "";
-  // URL: /RestApi/SetParameter/[instance id]/[parameter id]/[value]
-  url += "/RestApi/SetParameter/"+ String(EIOT_CLOUD_TEMP_INSTANCE_PARAM_ID) + "/"+String(temp); // generate EasIoT cloud update parameter URL
-
-  Serial.print("POST data to URL: ");
-  Serial.println(url);
-  
-  client.print(String("POST ") + url + " HTTP/1.1\r\n" +
-               "Host: " + String(EIOT_CLOUD_ADDRESS) + "\r\n" + 
-               "Connection: close\r\n" + 
-               "Content-Length: 0\r\n" + 
-               "\r\n");
-
-  delay(100);
-    while(client.available()){
-    String line = client.readStringUntil('\r');
-    Serial.print(line);
-  }
-  
-  Serial.println();
-  Serial.println("Connection closed");
-  digitalWrite(STATUS_LED,LOW);
+float Wh2kWh(unsigned long Wh) {
+  return (float)Wh/1000.f;
 }
-#endif
-*/
-/*-------- NTP code ----------*/
-long getNtpTime() {
-  WiFi.hostByName(ntpServerName, timeServerIP); 
-
-  while (Udp.parsePacket() > 0) ; // discard any previously received packets
-  Serial.println("Transmit NTP Request");
-  sendNTPpacket(timeServerIP);
-  uint32_t beginWait = millis();
-  while (millis() - beginWait < 1500) {
-    int size = Udp.parsePacket();
-    if (size >= NTP_PACKET_SIZE) {
-      Serial.println("Receive NTP Response");
-      Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
-      unsigned long secsSince1900;
-      // convert four bytes starting at location 40 to a long integer
-      secsSince1900 =  (unsigned long)packetBuffer[40] << 24;
-      secsSince1900 |= (unsigned long)packetBuffer[41] << 16;
-      secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
-      secsSince1900 |= (unsigned long)packetBuffer[43];
-      return secsSince1900 - 2208988800UL + timeZone * SECS_PER_HOUR;
-    }
-  }
-  Serial.println("No NTP Response :-(");
-  return 0; // return 0 if unable to get the time
-}
-
-// send an NTP request to the time server at the given address
-void sendNTPpacket(IPAddress &address) {
-  Serial.println("sending NTP packet...");
-  // set all bytes in the buffer to 0
-  memset(packetBuffer, 0, NTP_PACKET_SIZE);
-  // Initialize values needed to form NTP request
-  // (see URL above for details on the packets)
-  packetBuffer[0] = 0b11100011;   // LI, Version, Mode
-  packetBuffer[1] = 0;     // Stratum, or type of clock
-  packetBuffer[2] = 6;     // Polling Interval
-  packetBuffer[3] = 0xEC;  // Peer Clock Precision
-  // 8 bytes of zero for Root Delay & Root Dispersion
-  packetBuffer[12]  = 49;
-  packetBuffer[13]  = 0x4E;
-  packetBuffer[14]  = 49;
-  packetBuffer[15]  = 52;
-  // all NTP fields have been given values, now
-  // you can send a packet requesting a timestamp:                 
-  Udp.beginPacket(address, 123); //NTP requests are to port 123
-  Udp.write(packetBuffer, NTP_PACKET_SIZE);
-  Udp.endPacket();
-}
-
-
-void printDateTime() {
-	Serial.print(day());
-	Serial.print(DATE_DELIMITER);
-	Serial.print(month());
-	Serial.print(DATE_DELIMITER);
-	Serial.print(year());
-	Serial.print(DATE_TIME_DELIMITER);
-	printDigits(hour());
-	Serial.print(TIME_DELIMITER);
-	printDigits(minute());
-	Serial.print(TIME_DELIMITER);
-	printDigits(second());
-}
-void printDigits(int digits){
-  // utility function for digital clock display: prints preceding colon and leading 0
-  if(digits < 10) {
-    Serial.print('0');
-  }
-  Serial.print(digits);
-}
-
 
 void wifiConnect() {
   Serial.print("Connecting to AP");
@@ -384,12 +309,38 @@ void wifiConnect() {
 }
 
 void sendParamMQTT() {
+  pulseTotal+=pulseCount;
+  pulseHour+=pulseCount;
+  pulseDay+=pulseCount;
+  pulseCount=0;
   valueStr = String(tempIN);
   topic = "/Db/" + instanceId + "/3/Sensor.Parameter1";
   result = myMqtt.publish(topic, valueStr);
-  valueStr = String(energy);
+  valueStr = String(Wh2kWh(pulseTotal));
   topic = "/Db/" + instanceId + "/3/Sensor.Parameter2";
   result = myMqtt.publish(topic, valueStr);
+  
+  if (lastPulse>0) {
+    if (cycles>0) {
+      consumption=(3600000/(millis()-lastPulse)/cycles);
+    } else {
+      consumption = 0;
+    }
+    Serial.print("Prikon:");
+    Serial.print(consumption);
+    Serial.println(" W");
+  }
+  lastPulse=millis();
+  
+  Serial.print("Cycles:");
+  Serial.print(cycles);
+  Serial.print(" Cons:");
+  Serial.println(consumption);
+  
+  valueStr = String(consumption);
+  topic = "/Db/" + instanceId + "/3/Sensor.Parameter3";
+  result = myMqtt.publish(topic, valueStr);
+  consumption=0;
 }
 
 
@@ -482,11 +433,11 @@ void setMQTT() {
   Serial.print("ModuleId: ");
   Serial.println(storage.moduleId);
 
-  
+  /*
   Serial.print("Subscribe ");
   myMqtt.subscribe("/Db/"+instanceId+"/3/Sensor.Parameter2");
   Serial.println(" OK.");
-  
+  */
 
 }
 
@@ -509,9 +460,9 @@ void saveConfig() {
 void blik(byte count, unsigned int del) {
   for (int i=0; i<count; i++) {
     delay(del);
-    digitalWrite(STATUS_LED,HIGH);
+    //digitalWrite(STATUS_LED,HIGH);
     delay(del);
-    digitalWrite(STATUS_LED,LOW);
+    //digitalWrite(STATUS_LED,LOW);
   }
 }
 
@@ -523,4 +474,75 @@ void loadConfig() {
       EEPROM.read(CONFIG_START + 2) == CONFIG_VERSION[2])
     for (unsigned int t=0; t<sizeof(storage); t++)
       *((char*)&storage + t) = EEPROM.read(CONFIG_START + t);
+}
+
+/*-------- NTP code ----------*/
+long getNtpTime() {
+  WiFi.hostByName(ntpServerName, timeServerIP); 
+
+  while (Udp.parsePacket() > 0) ; // discard any previously received packets
+  Serial.println("Transmit NTP Request");
+  sendNTPpacket(timeServerIP);
+  uint32_t beginWait = millis();
+  while (millis() - beginWait < 1500) {
+    int size = Udp.parsePacket();
+    if (size >= NTP_PACKET_SIZE) {
+      Serial.println("Receive NTP Response");
+      Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
+      unsigned long secsSince1900;
+      // convert four bytes starting at location 40 to a long integer
+      secsSince1900 =  (unsigned long)packetBuffer[40] << 24;
+      secsSince1900 |= (unsigned long)packetBuffer[41] << 16;
+      secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
+      secsSince1900 |= (unsigned long)packetBuffer[43];
+      return secsSince1900 - 2208988800UL + timeZone * SECS_PER_HOUR;
+    }
+  }
+  Serial.println("No NTP Response :-(");
+  return 0; // return 0 if unable to get the time
+}
+
+// send an NTP request to the time server at the given address
+void sendNTPpacket(IPAddress &address) {
+  Serial.println("sending NTP packet...");
+  // set all bytes in the buffer to 0
+  memset(packetBuffer, 0, NTP_PACKET_SIZE);
+  // Initialize values needed to form NTP request
+  // (see URL above for details on the packets)
+  packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+  packetBuffer[1] = 0;     // Stratum, or type of clock
+  packetBuffer[2] = 6;     // Polling Interval
+  packetBuffer[3] = 0xEC;  // Peer Clock Precision
+  // 8 bytes of zero for Root Delay & Root Dispersion
+  packetBuffer[12]  = 49;
+  packetBuffer[13]  = 0x4E;
+  packetBuffer[14]  = 49;
+  packetBuffer[15]  = 52;
+  // all NTP fields have been given values, now
+  // you can send a packet requesting a timestamp:                 
+  Udp.beginPacket(address, 123); //NTP requests are to port 123
+  Udp.write(packetBuffer, NTP_PACKET_SIZE);
+  Udp.endPacket();
+}
+
+
+void printDateTime() {
+	Serial.print(day());
+	Serial.print(DATE_DELIMITER);
+	Serial.print(month());
+	Serial.print(DATE_DELIMITER);
+	Serial.print(year());
+	Serial.print(DATE_TIME_DELIMITER);
+	printDigits(hour());
+	Serial.print(TIME_DELIMITER);
+	printDigits(minute());
+	Serial.print(TIME_DELIMITER);
+	printDigits(second());
+}
+void printDigits(int digits){
+  // utility function for digital clock display: prints preceding colon and leading 0
+  if(digits < 10) {
+    Serial.print('0');
+  }
+  Serial.print(digits);
 }
