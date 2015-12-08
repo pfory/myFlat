@@ -341,6 +341,7 @@ void sendParamMQTT() {
   topic = "/Db/" + instanceId + "/3/Sensor.Parameter3";
   result = myMqtt.publish(topic, valueStr);
   consumption=0;
+  cycles=0;
 }
 
 
