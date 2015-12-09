@@ -1,0 +1,18 @@
+1 pulz 		  = 0.001kWh
+1000 pulzù  = 1kWh
+
+1000p/1h    = 1000W
+1000p/0.5h  = 2000W
+500p/h      = 500W
+1p/min      = 1/(1/60)  = 60W
+2p/min      = 2/(1/60)  = 120W
+10p/min     = 10/(1/60) = 600W
+1p/cas min  = p*60/cas min
+10p/2min    = 10*60/2 = 300W
+1p/cas s    = p*3600/cas sec
+10p/2min    = 10*60/2 = 300W
+
+
+p/h         = prikon W
+p*60/cas min
+p*3600/cas sec
