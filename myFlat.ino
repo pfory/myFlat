@@ -43,9 +43,13 @@ unsigned long sendInterval=60000; //ms
 unsigned long lastPulse=0;
 unsigned long consumption=0;
 unsigned int cycles=0;
+byte heartBeat=0;
+unsigned long pulseDuration=0;
+bool needSendDataOpenHAB = false;
 
 #define STATUS_LED 3
 
+#include <SPI.h>
 #include <Ethernet.h>
 #include <Xively.h>
 #include <XivelyClient.h>
@@ -87,13 +91,13 @@ XivelyDatastream datastreams[] = {
 XivelyFeed feed(xivelyFeed, 			datastreams, 			6);
 XivelyClient xivelyclient(client);
 
+//#define realTime
+#ifdef realTime
 EthernetUDP Udp;
 unsigned int localPort = 8888;  // local port to listen for UDP packets
 unsigned long getNtpTime();
 void sendNTPpacket(IPAddress &address);
-IPAddress timeServer(132, 163, 4, 101); // time-a.timefreq.bldrdoc.gov
-// IPAddress timeServer(132, 163, 4, 102); // time-b.timefreq.bldrdoc.gov
-// IPAddress timeServer(132, 163, 4, 103); // time-c.timefreq.bldrdoc.gov
+IPAddress timeServer(217, 31, 202, 100); // ntp.nic.cz
 const int timeZone = 1;     // Central European Time
 #define DATE_DELIMITER "."
 #define TIME_DELIMITER ":"
@@ -102,6 +106,7 @@ const int timeZone = 1;     // Central European Time
 #define watchdog
 #ifdef watchdog
 #include <avr/wdt.h>
+#endif
 #endif
 
 //----------display
@@ -116,6 +121,21 @@ const int timeZone = 1;     // Central European Time
 IIC_without_ACK lucky(OLED_SDA, OLED_SCL);
 #endif
 
+//#define mqqt
+#ifdef mqqt
+#include <PubSubClient.h>
+IPAddress serverPubSub(213, 192, 58, 66);
+EthernetClient ethClient;
+PubSubClient clientPubSub(serverPubSub, 31883, callback, ethClient);
+char charBuf[10];
+
+// Callback function
+void callback(char* topic, byte* payload, unsigned int length) {
+}
+
+#endif
+
+
 float versionSW=0.25;
 char versionSWString[] = "myFlat v"; //SW name & version
 
@@ -123,7 +143,7 @@ byte status=0;
 
 unsigned int const SERIAL_SPEED=9600;
 
-//#define verbose
+#define verbose
 
 //------------------------------------------------------------- S E T U P -------------------------------------------------------
 void setup() {
@@ -138,7 +158,7 @@ void setup() {
   lucky.Char_F6x8(0,2,"myFlat");
 #endif
   Serial.begin(SERIAL_SPEED);
-  //Serial.print(versionSWString);
+  Serial.print(versionSWString);
   Serial.println(versionSW);
   pinMode(STATUS_LED, OUTPUT);      // sets the digital pin as output
   Ethernet.begin(mac);
@@ -165,7 +185,7 @@ void setup() {
   Serial.println(Ethernet.localIP());
 #endif  
   int ret = xivelyclient.get(feed, xivelyKey);
-  Serial.println(ret);
+  //Serial.println(ret);
   if (ret > 0) {
 		pulseTotal = datastreams[2].getFloat()*1000;
 		pulseDay = datastreams[4].getFloat()*1000;
@@ -188,6 +208,7 @@ void setup() {
 #endif  
 
   lastSendTime = millis();
+#ifdef realTime
   Udp.begin(localPort);
   Serial.print("waiting 20s for time sync...");
   setSyncProvider(getNtpTime);
@@ -200,6 +221,7 @@ void setup() {
   Serial.print("Now is ");
   printDateTime();
   Serial.println(" CET.");
+#endif
 #endif
   pinMode(counterPin, INPUT);      
   attachInterrupt(counterInterrupt, counterISR, CHANGE);
@@ -222,6 +244,14 @@ void loop() {
     lastSendTime = millis();
     sendData();
   }
+#ifdef mqqt
+  if (needSendDataOpenHAB) {
+    needSendDataOpenHAB=false;
+    Serial.println("OH");
+    sendDataOpenHAB();
+    Serial.println("OK");
+  }
+#endif
 }
 
 //------------------------------------------------------------ F U N C T I O N S --------------------------------------------------------------
@@ -249,13 +279,27 @@ void counterISR() {
 #ifdef display
         lucky.Char_F6x8(0,2,"Prikon:");
 #endif
+        pulseDuration=(millis() - lastPulse);
+        needSendDataOpenHAB=true;
       }
       lastPulse=millis();
     }
   }
 }
 
-
+#ifdef mqqt
+void sendDataOpenHAB() {
+  if (clientPubSub.connect("Energymeter")) { //send data to openHAB on Raspberry
+    Serial.print("Sending...");
+    clientPubSub.publish("/flat/EnergyMeter/esp09/Pulse",floatToString(pulseTotal));
+    clientPubSub.publish("/flat/EnergyMeter/esp09/pulseLength",floatToString(pulseDuration));
+    clientPubSub.publish("/flat/EnergyMeter/esp09/VersionSW",floatToString(versionSW));
+    clientPubSub.publish("/flat/EnergyMeter/esp09/HeartBeat",floatToString(heartBeat));
+    if (heartBeat==0) heartBeat=1;
+    else heartBeat=0;
+  }
+}
+#endif
 void sendData() {
   datastreams[1].setInt(status);  
   pulseTotal+=pulseCount;
@@ -272,7 +316,9 @@ void sendData() {
   }
 #ifdef verbose
   Serial.print("Uploading data to Xively ");
+#ifdef realTime
   printDateTime();
+#endif
 #endif
 #ifdef watchdog
 	wdt_disable();
@@ -320,6 +366,7 @@ float Wh2kWh(unsigned long Wh) {
   return (float)Wh/1000.f;
 }
 
+#ifdef realTime
 #ifdef verbose
 void printDateTime() {
 	Serial.print(day());
@@ -342,7 +389,9 @@ void printDigits(int digits){
   Serial.print(digits);
 }
 #endif
+#endif
 
+#ifdef realTime
 /*-------- NTP code ----------*/
 
 const int NTP_PACKET_SIZE = 48; // NTP time is in the first 48 bytes of message
@@ -392,6 +441,7 @@ void sendNTPpacket(IPAddress &address) {
   Udp.write(packetBuffer, NTP_PACKET_SIZE);
   Udp.endPacket();
 }
+#endif
 
 #ifdef dataServer
 void showStatus() {
@@ -446,3 +496,10 @@ void blik(byte count, unsigned int del) {
     digitalWrite(STATUS_LED,LOW);
   }
 }
+
+#ifdef mqqt
+char* floatToString(float f) {
+  dtostrf(f, 5, 2, charBuf);
+  return charBuf;
+}
+#endif
