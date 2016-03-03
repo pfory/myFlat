@@ -51,21 +51,24 @@ bool needSendDataOpenHAB = false;
 
 #include <SPI.h>
 #include <Ethernet.h>
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; 
+
+//#define xively
+#ifdef xively
 #include <Xively.h>
 #include <XivelyClient.h>
 #include <XivelyDatastream.h>
 #include <XivelyFeed.h>
-#include <Time.h> 
-#include <HttpClient.h>
-byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; 
 EthernetClient client;
 //char server[] = "api.cosm.com";   // name address for cosm API
 //IPAddress ip(192,168,2,100);
-
+#endif
 //#define dataServer
 #ifdef dataServer
 EthernetServer server(80);
 #endif
+
+#ifdef xively
 char xivelyKey[] 			= "nJklwM9ts0HnRj3FbD6x2lA8CLOx8MADYx1WGGUSom9DRk9C";
 
 #define xivelyFeed 				711798850
@@ -90,9 +93,13 @@ XivelyDatastream datastreams[] = {
 
 XivelyFeed feed(xivelyFeed, 			datastreams, 			6);
 XivelyClient xivelyclient(client);
+#endif
+
+#include <Time.h> 
 
 //#define realTime
 #ifdef realTime
+#include <HttpClient.h>
 EthernetUDP Udp;
 unsigned int localPort = 8888;  // local port to listen for UDP packets
 unsigned long getNtpTime();
@@ -121,13 +128,13 @@ const int timeZone = 1;     // Central European Time
 IIC_without_ACK lucky(OLED_SDA, OLED_SCL);
 #endif
 
-//#define mqqt
+#define mqqt
 #ifdef mqqt
 #include <PubSubClient.h>
-IPAddress serverPubSub(213, 192, 58, 66);
+IPAddress serverPubSub(88, 146, 202, 186);
 EthernetClient ethClient;
 PubSubClient clientPubSub(serverPubSub, 31883, callback, ethClient);
-char charBuf[10];
+char charBuf[15];
 
 // Callback function
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -135,15 +142,23 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 #endif
 
+#include <EEPROM.h>
+unsigned int   EEPROMaddress = 0;
+unsigned long writesToEEPROM=0;
+char inData[12];
+int index;
+boolean started = false;
+boolean ended = false;
 
-float versionSW=0.25;
+float versionSW=0.30;
 char versionSWString[] = "myFlat v"; //SW name & version
 
 byte status=0;
 
-unsigned int const SERIAL_SPEED=9600;
-
 #define verbose
+#ifdef verbose
+unsigned int const SERIAL_SPEED=9600;
+#endif
 
 //------------------------------------------------------------- S E T U P -------------------------------------------------------
 void setup() {
@@ -157,9 +172,40 @@ void setup() {
   lucky.Fill_Screen(0x00);
   lucky.Char_F6x8(0,2,"myFlat");
 #endif
+#ifdef verbose
   Serial.begin(SERIAL_SPEED);
   Serial.print(versionSWString);
   Serial.println(versionSW);
+#endif
+
+  //read from EEPROM
+  if (readWritesCountFromEEPROM()==0) { //clear whole eeprom
+    Serial.println("CLEARING ALL EEPROM");
+    for (int i = 0 ; i < EEPROM.length() ; i++) {  //just once
+      EEPROM.write(i, 0);
+    }
+
+    pulseTotal=0;
+    saveDataToEEPROM();
+  }
+
+  EEPROMaddress=0;
+  while (true) {
+    if (readWritesCountFromEEPROM()<100000) {
+      pulseTotal = readPulsesCountFromEEPROM();
+      Serial.print("Pulses from EEPROM [addr=");
+      Serial.print(EEPROMaddress);
+      Serial.print("]:");
+      Serial.println(pulseTotal);
+      writesToEEPROM = readWritesCountFromEEPROM();
+      Serial.print("Writes to EEPROM:");
+      Serial.println(writesToEEPROM);
+      break;
+    }
+    EEPROMaddress=EEPROMaddress+8;
+  }
+    
+
   pinMode(STATUS_LED, OUTPUT);      // sets the digital pin as output
   Ethernet.begin(mac);
   blik(1, 100);
@@ -178,12 +224,14 @@ void setup() {
 #ifdef watchdog
 	wdt_reset();
 #endif  
-  
+
+
 #ifdef dataServer
   server.begin();
   Serial.print("server is at ");
   Serial.println(Ethernet.localIP());
 #endif  
+#ifdef xivelyely
   int ret = xivelyclient.get(feed, xivelyKey);
   //Serial.println(ret);
   if (ret > 0) {
@@ -203,6 +251,7 @@ void setup() {
 #endif
   }
   datastreams[0].setFloat(versionSW);  
+#endif
 #ifdef watchdog
 	wdt_reset();
 #endif  
@@ -227,6 +276,7 @@ void setup() {
   attachInterrupt(counterInterrupt, counterISR, CHANGE);
   
   blik(10, 20);
+  Serial.println("setup end");
 }
 
 //------------------------------------------------------------ L O O P -----------------------------------------------------------------------
@@ -240,18 +290,46 @@ void loop() {
     showStatus();
   }
 #endif
+#ifdef xively
   if(!client.connected() && (millis() - lastSendTime > sendInterval)) {
     lastSendTime = millis();
     sendData();
   }
+#endif
 #ifdef mqqt
   if (needSendDataOpenHAB) {
     needSendDataOpenHAB=false;
-    Serial.println("OH");
+    //Serial.println("OH");
     sendDataOpenHAB();
-    Serial.println("OK");
   }
 #endif
+  while(Serial.available() > 0) {
+    char aChar = Serial.read();
+    if(aChar == '>' && started == false) {
+      started = true;
+      index = 0;
+      inData[index] = '\0';
+    }else if(aChar == '>') {
+        ended = true;
+    }else if(started) {
+        inData[index] = aChar;
+        index++;
+        inData[index] = '\0';
+    }
+  }
+
+  if(started && ended) {
+    pulseTotal = atol(inData);
+    // Get ready for the next time
+    started = false;
+    ended = false;
+    index = 0;
+    inData[index] = '\0';
+    Serial.print("Set pulse count to ");
+    Serial.println(pulseTotal);
+  }
+
+
 }
 
 //------------------------------------------------------------ F U N C T I O N S --------------------------------------------------------------
@@ -266,15 +344,15 @@ void counterISR() {
     //Serial.println("End pulse");
     //Serial.print("Pulse length:");
     //Serial.println(pulseLength);
-    if ((pulseLength)>35 && (pulseLength)<100) {
+    if ((pulseLength)>70 && (pulseLength)<100) { //typical 85ms
       pulseCount++;
       if (lastPulse>0) {
         consumption+=3600000/(millis()-lastPulse);
         cycles++;
 #ifdef verbose
-        Serial.print("Prikon:");
+        /*Serial.print("Prikon:");
         Serial.print(3600000/(millis()-lastPulse));
-        Serial.println(" W");
+        Serial.println(" W");*/
 #endif
 #ifdef display
         lucky.Char_F6x8(0,2,"Prikon:");
@@ -291,15 +369,24 @@ void counterISR() {
 void sendDataOpenHAB() {
   if (clientPubSub.connect("Energymeter")) { //send data to openHAB on Raspberry
     Serial.print("Sending...");
-    clientPubSub.publish("/flat/EnergyMeter/esp09/Pulse",floatToString(pulseTotal));
+    clientPubSub.publish("/flat/EnergyMeter/esp09/Pulse",floatToString(++pulseTotal));
     clientPubSub.publish("/flat/EnergyMeter/esp09/pulseLength",floatToString(pulseDuration));
     clientPubSub.publish("/flat/EnergyMeter/esp09/VersionSW",floatToString(versionSW));
     clientPubSub.publish("/flat/EnergyMeter/esp09/HeartBeat",floatToString(heartBeat));
     if (heartBeat==0) heartBeat=1;
     else heartBeat=0;
+
+    Serial.print("OH OK ");
+    saveDataToEEPROM();
+    Serial.print(" pulsu:");
+    Serial.print(readPulsesCountFromEEPROM());
+    Serial.print(", zapisu:");
+    Serial.println(readWritesCountFromEEPROM());
   }
 }
 #endif
+
+#ifdef xively
 void sendData() {
   datastreams[1].setInt(status);  
   pulseTotal+=pulseCount;
@@ -361,6 +448,7 @@ void sendData() {
 #endif
   //lastSendTime = millis();
 }
+#endif
 
 float Wh2kWh(unsigned long Wh) {
   return (float)Wh/1000.f;
@@ -499,7 +587,59 @@ void blik(byte count, unsigned int del) {
 
 #ifdef mqqt
 char* floatToString(float f) {
-  dtostrf(f, 5, 2, charBuf);
+  dtostrf(f, 1, 2, charBuf);
   return charBuf;
 }
 #endif
+
+
+// b1 b2 b3 b4   //Writes
+// 0  1  2  3    //address
+unsigned long readPulsesCountFromEEPROM() {
+  byte b4=EEPROM.read(EEPROMaddress+7);
+  byte b3=EEPROM.read(EEPROMaddress+6);
+  byte b2=EEPROM.read(EEPROMaddress+5);
+  byte b1=EEPROM.read(EEPROMaddress+4);
+  return (b1<<24)|(b2<<16)|(b3<<8)|b4;
+}
+
+// b1 b2 b3 b4   //Pulses
+// 4  5  6  7    //address
+unsigned long readWritesCountFromEEPROM() {
+  byte b4=EEPROM.read(EEPROMaddress+3);
+  byte b3=EEPROM.read(EEPROMaddress+2);
+  byte b2=EEPROM.read(EEPROMaddress+1);
+  byte b1=EEPROM.read(EEPROMaddress);
+  return b1<<24|b2<<16|b3<<8|b4;
+}
+
+
+void saveDataToEEPROM() {
+  unsigned long m=0xFF;
+  writesToEEPROM++;
+  m=0xFF000000;
+  byte b1=(byte)((writesToEEPROM&m)>>24);
+  EEPROM.write(EEPROMaddress, b1); 
+  m=0x00FF0000;
+  b1=(byte)((writesToEEPROM&m)>>16);
+  EEPROM.write(EEPROMaddress+1, b1); 
+  m=0x0000FF00;
+  b1=(byte)((writesToEEPROM&m)>>8);
+  EEPROM.write(EEPROMaddress+2, b1); 
+  m=0x000000FF;
+  b1=(byte)(writesToEEPROM&m);
+  EEPROM.write(EEPROMaddress+3, b1); 
+
+  m=0xFF000000;
+  b1=(byte)((pulseTotal&m)>>24);
+  EEPROM.write(EEPROMaddress+4, b1); 
+  m=0x00FF0000;
+  b1=(byte)((pulseTotal&m)>>16);
+  EEPROM.write(EEPROMaddress+5, b1); 
+  m=0x0000FF00;
+  b1=(byte)((pulseTotal&m)>>8);
+  EEPROM.write(EEPROMaddress+6, b1); 
+  m=0x000000FF;
+  b1=(byte)(pulseTotal&m);
+  EEPROM.write(EEPROMaddress+7, b1); 
+}

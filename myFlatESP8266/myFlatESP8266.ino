@@ -61,18 +61,23 @@ const char* ssid     = "Datlovo";
 const char* password = "Nu6kMABmseYwbCoJ7LyG";
 
 byte status=0;
-unsigned long       lastSendTime      = 0;
-const unsigned long sendInterval      = 20000; //ms
-volatile unsigned long       startPulse        = 0;
-volatile unsigned int        pulseLength       = 0;
+unsigned long                lastSendTime      = 0;
+const unsigned long          sendInterval      = 20000; //ms
+unsigned long                startPulse        = 0;
+unsigned int                 pulseLength       = 0;
 volatile unsigned int        pulseCount        = 0;
 unsigned long                pulseTotal        = 0;
 unsigned long                pulseHour         = 0;
 unsigned long                pulseDay          = 0;
-unsigned long                lastPulse         = 0;
+volatile unsigned long       lastPulse         = 0;
+unsigned long                lastPulseOld      = 0;
 unsigned long                consumption       = 0;
-unsigned long                cycles            = 0;
 bool                         saveEEPROMEnergy  = false;
+const float                  pulseCountkWh     = 1000.f;  //pocet impulsu na 1 kWh
+const float                  WhkWh             = 1000.f;  //pocet Wh na kWh
+const float                  diffForSavekWh    = 1.f ;    //diference kWh pro zapis do EEPROM
+unsigned int p=0;
+
 #ifdef IoT
 #define AP_SSID "Datlovo"
 #define AP_PASSWORD "Nu6kMABmseYwbCoJ7LyG"
@@ -91,7 +96,7 @@ String topic("");
 bool stepOk                         = false;
 
 #define CONFIG_START 0
-#define CONFIG_VERSION "v01"
+#define CONFIG_VERSION "v04"
 
 struct StoreStruct {
   // This is for mere detection if they are your settings
@@ -101,7 +106,7 @@ struct StoreStruct {
 } storage = {
   CONFIG_VERSION,
   3,
-  3620.33,
+  3628.26,
 };
 
 #endif
@@ -177,7 +182,7 @@ void setup() {
   //ESP.wdtEnable(WDTO_8S);
   //Serial.setDebugOutput(true);
  
-  pulseTotal=storage.energy*1000.f;
+  pulseTotal=kWh2Pulse(storage.energy);
   Serial.print("Energy from EEPROM: ");
   Serial.print(storage.energy);
   Serial.println(" kWh");
@@ -193,55 +198,67 @@ void loop() {
     delay(1000);
     //while (sensorsIN.getCheckForConversion()==false) {
       tempIN = sensorsIN.getTempCByIndex(0);
+      valueStr = String(tempIN);
+      topic = "/Db/" + instanceId + "/3/Sensor.Parameter1";
+      result = myMqtt.publish(topic, valueStr);
     //}
-    displayTemp();
+    //displayTemp();
     #ifdef xively
     sendDataXively();
     #endif
-    #ifdef IoT
-    sendParamMQTT();
-    #endif
   }
-  if (saveEEPROMEnergy) {
-    storage.energy=pulseCount/1000;
-    Serial.print("Save energy to EEPROM: ");
-    Serial.print(storage.energy);
-    Serial.println(" kWh");
-    saveConfig();
-    saveEEPROMEnergy=false;
-  }
+  if (lastPulse!=lastPulseOld) {
+    if (lastPulse-lastPulseOld>100) {
+      pulseCount++;
+      pulseTotal+=pulseCount;
+      pulseHour+=pulseCount;
+      pulseDay+=pulseCount;
+      pulseCount=0;
+      valueStr = String(pulse2kWh(pulseTotal));
+      topic = "/Db/" + instanceId + "/3/Sensor.Parameter2";
+      result = myMqtt.publish(topic, valueStr);
+      Serial.print(p++);
+      Serial.print(". ");
+      printDateTime();
+      Serial.print(" ");
+      Serial.print(lastPulse-lastPulseOld);
+      Serial.print("ms ");
+      consumption=3600000/(lastPulse-lastPulseOld);
+      Serial.print(consumption);
+      Serial.println("W");
+      valueStr = String(consumption);
+      topic = "/Db/" + instanceId + "/3/Sensor.Parameter3";
+      result = myMqtt.publish(topic, valueStr);
 
+      if (storage.energy>pulse2kWh(pulseTotal)+diffForSavekWh) {
+        Serial.println(pulse2kWh(pulseTotal));
+        Serial.println(pulseTotal);
+        Serial.print("SAVE energy to EEPROM:");
+        storage.energy=pulse2kWh(pulseTotal);
+        Serial.println(storage.energy);
+        saveConfig();
+      }
+    }
+    else {
+      Serial.print("Zakmit:");
+      Serial.println(lastPulse-lastPulseOld);
+    }
+    lastPulseOld=lastPulse;
+  }
 }
 
 //------------------------------------------------------------ F U N C T I O N S --------------------------------------------------------------
 void counterISR() { 
-  //Serial.println("PULSE");
-  //if (digitalRead(COUNTER_PIN)==HIGH) {
-    //digitalWrite(STATUS_LED,HIGH);
-    //startPulse=millis();
-    //Serial.println("Start pulse");
-  //} else {
-    //digitalWrite(STATUS_LED,LOW);
-    //pulseLength = millis()-startPulse;
-    //Serial.println("End pulse");
-    //Serial.print("Pulse length:");
-    //Serial.println(pulseLength);
-    //if ((pulseLength)>35 && (pulseLength)<100) {
-    pulseCount++;
-    cycles++;
-    if ((pulseCount%1000)==0) {
-      saveEEPROMEnergy=true;
-    }
-    //}
-  //}
+  lastPulse=millis();
 }
+
 
 void startMeas() {
   // call sensors.requestTemperatures() to issue a global temperature 
   // request to all devices on the bus
-  Serial.print("Requesting temperatures...");
+  //Serial.print("Requesting temperatures...");
   sensorsIN.requestTemperatures(); // Send the command to get temperatures
-  Serial.println("DONE");
+  //Serial.println("DONE");
 }
 
 
@@ -257,12 +274,11 @@ void sendDataXively() {
   pulseTotal+=pulseCount;
   pulseHour+=pulseCount;
   pulseDay+=pulseCount;
-  pulseCount=0;
   datastreams[2].setFloat(Wh2kWh(pulseTotal));  //kWh
   datastreams[3].setFloat(Wh2kWh(pulseHour)); //kWh/hod
   datastreams[4].setFloat(Wh2kWh(pulseDay)); //kWh/den
-  if (cycles>0) {
-    datastreams[5].setInt(consumption/cycles); //spotreba W
+  if (pulseCount>0) {
+    datastreams[5].setInt(consumption/pulseCount); //spotreba W
   } else {
       datastreams[5].setInt(0); //spotreba W
   }
@@ -292,8 +308,16 @@ void sendDataXively() {
 }
 #endif
 
+float pulse2kWh(unsigned long pulse) {
+  return (float)pulse/pulseCountkWh;
+}
+
+unsigned long kWh2Pulse(float kWh) {
+  return kWh*pulseCountkWh;
+}
+
 float Wh2kWh(unsigned long Wh) {
-  return (float)Wh/1000.f;
+  return (float)(Wh/WhkWh);
 }
 
 void wifiConnect() {
@@ -308,42 +332,6 @@ void wifiConnect() {
   Serial.println("WiFi connected");  
 }
 
-void sendParamMQTT() {
-  pulseTotal+=pulseCount;
-  pulseHour+=pulseCount;
-  pulseDay+=pulseCount;
-  pulseCount=0;
-  valueStr = String(tempIN);
-  topic = "/Db/" + instanceId + "/3/Sensor.Parameter1";
-  result = myMqtt.publish(topic, valueStr);
-  valueStr = String(Wh2kWh(pulseTotal));
-  topic = "/Db/" + instanceId + "/3/Sensor.Parameter2";
-  result = myMqtt.publish(topic, valueStr);
-  
-  if (lastPulse>0) {
-    if (cycles>0) {
-      consumption=(3600000/(millis()-lastPulse)/cycles);
-    } else {
-      consumption = 0;
-    }
-    Serial.print("Prikon:");
-    Serial.print(consumption);
-    Serial.println(" W");
-  }
-  lastPulse=millis();
-  
-  Serial.print("Cycles:");
-  Serial.print(cycles);
-  Serial.print(" Cons:");
-  Serial.println(consumption);
-  
-  valueStr = String(consumption);
-  topic = "/Db/" + instanceId + "/3/Sensor.Parameter3";
-  result = myMqtt.publish(topic, valueStr);
-  consumption=0;
-  cycles=0;
-}
-
 
 void myConnectedCb() {
   Serial.println("connected to MQTT server");
@@ -356,7 +344,7 @@ void myDisconnectedCb() {
 }
 
 void myPublishedCb() {
-  Serial.println(" - published.");
+  Serial.println("pub");
 }
 
 void myDataCb(String& topic, String& data) {  
